@@ -3,13 +3,26 @@
 import { rm } from "node:fs/promises";
 import type { Notifier } from "../src/notify.js";
 import { processLead } from "../src/pipeline.js";
-import { FileRunLog } from "../src/runs.js";
-import { FileStore, type LeadStatus } from "../src/store.js";
+import "dotenv/config";
+import { connect, PostgresRunLog, PostgresStore, setup } from "../src/pg.js";
+import { FileRunLog, type RunLog } from "../src/runs.js";
+import { FileStore, type LeadStatus, type LeadStore } from "../src/store.js";
 
-await rm("data/leads.json", { force: true });
-await rm("data/runs.json", { force: true });
-const store = new FileStore("data/leads.json");
-const runs = new FileRunLog("data/runs.json");
+// Seeds whichever store the app uses: Postgres when STORE=postgres, otherwise the local files.
+let store: LeadStore;
+let runs: RunLog;
+const sql = process.env.STORE === "postgres" ? connect() : null;
+if (sql) {
+  await setup(sql);
+  await sql`truncate leads, runs`;
+  store = new PostgresStore(sql);
+  runs = new PostgresRunLog(sql);
+} else {
+  await rm("data/leads.json", { force: true });
+  await rm("data/runs.json", { force: true });
+  store = new FileStore("data/leads.json");
+  runs = new FileRunLog("data/runs.json");
+}
 
 let slackDown = false;
 const notifier: Notifier = {
@@ -75,3 +88,4 @@ for (const l of [...LEADS.map((x) => ({ d: x.d, body: x as unknown as Record<str
 
 const all = await store.list();
 console.log(`Demo data ready: ${all.length} leads, ${(await runs.list(5000)).length} pipeline runs.`);
+await sql?.end();
