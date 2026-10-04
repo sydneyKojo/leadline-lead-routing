@@ -1,0 +1,13 @@
+# Local n8n for importing and running the workflow: http://localhost:5678
+services:
+  n8n:
+    image: docker.n8n.io/n8nio/n8n
+    ports:
+      - "5678:5678"
+    environment:
+      - GENERIC_TIMEZONE=UTC
+    volumes:
+      - n8n-data:/home/node/.n8n
+      - ./:/workflows:ro
+volumes:
+  n8n-data:

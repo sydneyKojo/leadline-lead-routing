@@ -1,0 +1,329 @@
+{
+  "name": "Lead to CRM (Sheets + Slack + Gmail)",
+  "nodes": [
+    {
+      "id": "1",
+      "name": "Lead webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        300
+      ],
+      "webhookId": "lead-to-crm",
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "lead",
+        "authentication": "headerAuth",
+        "responseMode": "responseNode",
+        "options": {}
+      }
+    },
+    {
+      "id": "2",
+      "name": "Normalise & score",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        300
+      ],
+      "parameters": {
+        "jsCode": "// n8n Code node (\"Run Once for All Items\"). Same rules as src/lead.ts and src/score.ts.\nconst FREE = new Set([\"gmail.com\", \"googlemail.com\", \"yahoo.com\", \"hotmail.com\", \"outlook.com\", \"live.com\", \"icloud.com\", \"me.com\", \"aol.com\", \"proton.me\", \"protonmail.com\", \"gmx.com\", \"mail.com\", \"yandex.com\"]);\nconst titleCase = (s) => s.toLowerCase().split(/(\\s+|-|')/).map((p) => (/^[a-z]/.test(p) ? p[0].toUpperCase() + p.slice(1) : p)).join(\"\");\nconst budgetOf = (raw) => {\n  if (!raw) return null;\n  const nums = [...String(raw).toLowerCase().replace(/,/g, \"\").matchAll(/(\\d+(?:\\.\\d+)?)\\s*(k|m)?/g)]\n    .map((m) => Number(m[1]) * (m[2] === \"k\" ? 1e3 : m[2] === \"m\" ? 1e6 : 1));\n  return nums.length ? Math.max(...nums) : null;\n};\nconst phoneOf = (raw) => {\n  if (!raw) return \"\";\n  const t = String(raw).trim();\n  const d = t.replace(/\\D/g, \"\").replace(/^00/, \"\");\n  if (d.length < 7 || d.length > 15) return \"\";\n  return t.startsWith(\"+\") || t.startsWith(\"00\") ? `+${d}` : d;\n};\n\nreturn $input.all().map((item) => {\n  const b = item.json.body ?? item.json;\n  if (b.website) return { json: { valid: false, spam: true, errors: [] } };\n\n  const errors = [];\n  const name = String(b.name ?? \"\").replace(/\\s+/g, \" \").trim();\n  const email = String(b.email ?? \"\").trim().toLowerCase();\n  if (!name) errors.push(\"name: name is required\");\n  if (!/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(email)) errors.push(\"email: email is not valid\");\n  if (errors.length) return { json: { valid: false, spam: false, errors } };\n\n  const domain = email.split(\"@\")[1];\n  const free = FREE.has(domain);\n  const company = String(b.company ?? \"\").trim() || (free ? \"\" : titleCase(domain.split(\".\").slice(0, -1).join(\" \").replace(/[-_]/g, \" \")));\n  const budget = budgetOf(b.budget);\n  const role = String(b.role ?? \"\").trim();\n  const message = String(b.message ?? \"\").trim();\n  const phone = phoneOf(b.phone);\n\n  let score = 0;\n  const reasons = [];\n  const add = (n, why) => {\n    score += n;\n    reasons.push(`${n > 0 ? \"+\" : \"\"}${n} ${why}`);\n  };\n  if (free) add(-10, \"free email address\");\n  else add(20, \"company email domain\");\n  if (budget !== null) {\n    if (budget >= 10000) add(35, \"budget $10k+\");\n    else if (budget >= 2000) add(20, \"budget $2k+\");\n    else if (budget >= 500) add(10, \"budget $500+\");\n    else add(-5, \"budget under $500\");\n  }\n  if (/\\b(ceo|cto|coo|cfo|founder|co-founder|owner|director|head|vp|president|partner)\\b/i.test(role)) add(15, \"decision-maker role\");\n  if (phone) add(5, \"left a phone number\");\n  if (/\\b(asap|urgent|this week|immediately|deadline|quickly)\\b/i.test(message)) add(10, \"urgent timeline\");\n  if (/\\b(quote|pricing|price|proposal|budget|hire|contract|start)\\b/i.test(message)) add(10, \"buying intent in message\");\n  if (message.length > 0 && message.length < 15) add(-5, \"very short message\");\n  const tier = score >= 50 ? \"hot\" : score >= 20 ? \"warm\" : \"cold\";\n\n  return {\n    json: {\n      valid: true,\n      spam: false,\n      reasons,\n      lead: {\n        Name: titleCase(name), Email: email, Company: company, Phone: phone, Role: role,\n        \"Budget USD\": budget ?? \"\", Message: message, Source: String(b.source ?? \"web-form\"),\n        Score: score, Tier: tier, \"Updated At\": new Date().toISOString(),\n      },\n    },\n  };\n});\n"
+      }
+    },
+    {
+      "id": "3",
+      "name": "Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        440,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.valid }}",
+              "value2": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "4",
+      "name": "Reject",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        660,
+        480
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ status: $json.spam ? \"spam\" : \"rejected\", errors: $json.errors }) }}",
+        "options": {
+          "responseCode": 422
+        }
+      }
+    },
+    {
+      "id": "5",
+      "name": "Find existing lead",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        660,
+        200
+      ],
+      "alwaysOutputData": true,
+      "parameters": {
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "YOUR_GOOGLE_SHEET_ID"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Leads"
+        },
+        "filtersUI": {
+          "values": [
+            {
+              "lookupColumn": "Email",
+              "lookupValue": "={{ $json.lead.Email }}"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "6",
+      "name": "Upsert in Sheets",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        880,
+        200
+      ],
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "YOUR_GOOGLE_SHEET_ID"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Leads"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "matchingColumns": [
+            "Email"
+          ],
+          "value": {
+            "Name": "={{ $('Normalise & score').item.json.lead[\"Name\"] }}",
+            "Email": "={{ $('Normalise & score').item.json.lead[\"Email\"] }}",
+            "Company": "={{ $('Normalise & score').item.json.lead[\"Company\"] }}",
+            "Phone": "={{ $('Normalise & score').item.json.lead[\"Phone\"] }}",
+            "Role": "={{ $('Normalise & score').item.json.lead[\"Role\"] }}",
+            "Budget USD": "={{ $('Normalise & score').item.json.lead[\"Budget USD\"] }}",
+            "Message": "={{ $('Normalise & score').item.json.lead[\"Message\"] }}",
+            "Source": "={{ $('Normalise & score').item.json.lead[\"Source\"] }}",
+            "Score": "={{ $('Normalise & score').item.json.lead[\"Score\"] }}",
+            "Tier": "={{ $('Normalise & score').item.json.lead[\"Tier\"] }}",
+            "Updated At": "={{ $('Normalise & score').item.json.lead[\"Updated At\"] }}"
+          }
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "7",
+      "name": "Slack alert",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.2,
+      "position": [
+        1100,
+        200
+      ],
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "#leads"
+        },
+        "text": "={{ $('Normalise & score').item.json.lead.Tier === \"hot\" ? \":fire:\" : $('Normalise & score').item.json.lead.Tier === \"warm\" ? \":sunny:\" : \":snowflake:\" }} {{ $('Find existing lead').item.json.Email ? \"Returning\" : \"New\" }} {{ $('Normalise & score').item.json.lead.Tier }} lead (score {{ $('Normalise & score').item.json.lead.Score }}): *{{ $('Normalise & score').item.json.lead.Name }}*{{ $('Normalise & score').item.json.lead.Company ? \" at \" + $('Normalise & score').item.json.lead.Company : \"\" }}\n{{ $('Normalise & score').item.json.lead.Email }} · via {{ $('Normalise & score').item.json.lead.Source }}\n> {{ $('Normalise & score').item.json.lead.Message.slice(0, 280) }}",
+        "otherOptions": {}
+      }
+    },
+    {
+      "id": "8",
+      "name": "New lead?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        1320,
+        200
+      ],
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $('Find existing lead').item.json.Email ?? \"\" }}",
+              "operation": "isEmpty"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "9",
+      "name": "Follow-up email",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        1540,
+        120
+      ],
+      "parameters": {
+        "sendTo": "={{ $('Normalise & score').item.json.lead.Email }}",
+        "subject": "=Thanks for reaching out{{ $('Normalise & score').item.json.lead.Company ? \", \" + $('Normalise & score').item.json.lead.Company : \"\" }}",
+        "emailType": "text",
+        "message": "=Hi {{ $('Normalise & score').item.json.lead.Name.split(\" \")[0] }},\n\nThanks for getting in touch. We've received your request.\n\n{{ $('Normalise & score').item.json.lead.Tier === \"hot\" ? \"I'd like to set up a 20-minute call this week. Reply with a time that suits you.\" : \"I'll review the details and come back to you within one business day with next steps.\" }}\n\nBest regards,\nThe team",
+        "options": {}
+      }
+    },
+    {
+      "id": "10",
+      "name": "Respond OK",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1760,
+        200
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ status: \"ok\", tier: $('Normalise & score').item.json.lead.Tier, score: $('Normalise & score').item.json.lead.Score }) }}",
+        "options": {}
+      }
+    }
+  ],
+  "connections": {
+    "Lead webhook": {
+      "main": [
+        [
+          {
+            "node": "Normalise & score",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalise & score": {
+      "main": [
+        [
+          {
+            "node": "Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Valid?": {
+      "main": [
+        [
+          {
+            "node": "Find existing lead",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Reject",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find existing lead": {
+      "main": [
+        [
+          {
+            "node": "Upsert in Sheets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upsert in Sheets": {
+      "main": [
+        [
+          {
+            "node": "Slack alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Slack alert": {
+      "main": [
+        [
+          {
+            "node": "New lead?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "New lead?": {
+      "main": [
+        [
+          {
+            "node": "Follow-up email",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond OK",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Follow-up email": {
+      "main": [
+        [
+          {
+            "node": "Respond OK",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}
