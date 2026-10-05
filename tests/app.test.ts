@@ -12,7 +12,7 @@ const BASE = "http://leadline.test";
 const ADMIN = "admin-token-for-tests";
 const SECRET = "webhook-secret-for-tests";
 
-function setup(opts: { slackFails?: boolean; formLimit?: number } = {}) {
+function setup(opts: { slackFails?: boolean; formLimit?: number; trustProxy?: boolean } = {}) {
   const store = new MemoryStore();
   const runs = new MemoryRunLog();
   const state = { slackFails: !!opts.slackFails, alerts: 0, emails: 0 };
@@ -25,7 +25,7 @@ function setup(opts: { slackFails?: boolean; formLimit?: number } = {}) {
       state.emails++;
     },
   };
-  const app = createApp({ store, runs, notifier, adminToken: ADMIN, webhookSecret: SECRET, formLimiter: new RateLimiter(opts.formLimit ?? 50, 60_000) });
+  const app = createApp({ store, runs, notifier, adminToken: ADMIN, webhookSecret: SECRET, formLimiter: new RateLimiter(opts.formLimit ?? 50, 60_000), trustProxy: opts.trustProxy });
   const cookie = `leadline_session=${issueSession(ADMIN)}`;
   return { app, store, runs, state, cookie };
 }
@@ -68,6 +68,12 @@ describe("public demo form", () => {
   it("rejects cross-site posts", async () => {
     const { app } = setup();
     expect((await app.request(json("/form", { name: "A", email: "a@acme.com" }, { Origin: "https://evil.example" }))).status).toBe(403);
+  });
+  it("accepts its own https origin behind a proxy", async () => {
+    const { app } = setup({ trustProxy: true });
+    const headers = { Origin: "https://leads.example.com", "X-Forwarded-Proto": "https", "X-Forwarded-Host": "leads.example.com" };
+    expect((await app.request(json("/form", { name: "A", email: "a@acme.com" }, headers))).status).toBe(200);
+    expect((await app.request(json("/form", { name: "A", email: "a@acme.com" }, { ...headers, Origin: "https://evil.example" }))).status).toBe(403);
   });
   it("rate limits a visitor", async () => {
     const { app } = setup({ formLimit: 1 });

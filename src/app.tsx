@@ -49,7 +49,17 @@ export function createApp(deps: AppDeps) {
   const formLimiter = deps.formLimiter ?? new RateLimiter(10, 10 * 60_000);
   const app = new Hono();
   const pipelineDeps = { store, notifier, runs, logError: deps.logError };
-  const origin = (c: Context) => new URL(c.req.url).origin;
+  // Behind a TLS-terminating proxy (Railway, Render) the request arrives as plain http; trust its forwarded headers.
+  const origin = (c: Context) => {
+    const url = new URL(c.req.url);
+    if (deps.trustProxy) {
+      const proto = c.req.header("x-forwarded-proto")?.split(",")[0]?.trim();
+      const host = c.req.header("x-forwarded-host")?.split(",")[0]?.trim();
+      if (proto === "https" || proto === "http") url.protocol = `${proto}:`;
+      if (host) url.host = host;
+    }
+    return url.origin;
+  };
   const ip = (c: Context) => {
     if (deps.trustProxy) {
       const fwd = c.req.header("x-forwarded-for")?.split(",")[0]?.trim();

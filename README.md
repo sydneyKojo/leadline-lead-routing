@@ -90,7 +90,7 @@ cp .env.example .env        # set WEBHOOK_SECRET and ADMIN_TOKEN; STORE=postgres
 createdb leadline && createdb leadline_test
 npm run seed                # a month of example enquiries, sent through the real pipeline
 npm run dev                 # http://localhost:3200 · demo form: /demo · dashboard: /app
-npm test                    # 28 tests: parsing, scoring, de-duplication, spam, rate limits, retry, auth, CSV, Postgres
+npm test                    # 29 tests: parsing, scoring, de-duplication, spam, rate limits, retry, auth, CSV, Postgres
 ```
 
 Send a lead from any tool:
