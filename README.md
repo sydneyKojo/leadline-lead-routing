@@ -8,6 +8,8 @@ dashboard to work the pipeline.
 
 **Built by [Sydney Torkornoo](https://baobabpeaks.com)**, full-stack and automation developer · [GitHub](https://github.com/sydneyKojo)
 
+**Live demo: [leadline.baobabpeaks.com](https://leadline.baobabpeaks.com)**. Send a lead through the [demo form](https://leadline.baobabpeaks.com/demo).
+
 ---
 
 ## The problem it solves
@@ -118,7 +120,7 @@ n8n/               the no-code workflow and its generator
 ## Deployment notes
 
 Runs as one Node service (Railway, Render or Fly.io). Set `STORE=postgres` and `DATABASE_URL`; it can share a
-Postgres server with other apps by using its own database (e.g. `/leadline`). Tables are created on start. Connect Slack (`SLACK_WEBHOOK_URL`) and Resend (`RESEND_API_KEY`) to send real alerts and emails.
+Postgres server with other apps by using its own database (e.g. `/leadline`). The database and tables are created on start. Connect Slack (`SLACK_WEBHOOK_URL`) and Resend (`RESEND_API_KEY`) to send real alerts and emails.
 
 ---
 
